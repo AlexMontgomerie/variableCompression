@@ -13,7 +13,6 @@ using namespace std;
 typedef uint32_t bus_t;
 typedef uint32_t data_t;
 
-#define OPENCV_TYPE CV_16UC1
 typedef uint8_t pixel_t;
 
 struct comp_t {
@@ -58,8 +57,8 @@ string type2str(int type) {
   return r;
 }
 
-int get_compressed_image(comp_t ** image_comp, Mat image, int frame_width, int frame_height);
-comp_t get_frame_pack(Mat frame);
+int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int frame_height);
+void get_frame_pack(Mat frame, comp_t * frame_comp);
 float get_compression_ratio(Mat image, comp_t * image_comp, int num_frames);
 
 int main()
@@ -67,7 +66,7 @@ int main()
 
   //load in an image
   //Mat img(800, 800, OPENCV_TYPE, Scalar(100, 250, 30)); 
-  Mat img_tmp = imread("test.jpg");
+  Mat img_tmp = imread("med-test.jpg");
   Mat img;
   cvtColor(img_tmp,img,COLOR_BGR2GRAY);
   if (img.empty()) 
@@ -91,13 +90,14 @@ int main()
   cout << "Compressed Image Buffer Created ..." << endl;
 
   //get frame buffer
-  int num_frames = get_compressed_image(&image_comp, img, 20, 20);
+  int num_frames = get_compressed_image(image_comp, img, 50, 50);
 
   if (!num_frames)
     cout << "ERROR: image of wrong dimensions" << endl;
 
-  printf("here");
-  
+  float cr = get_compression_ratio(img,image_comp,num_frames);
+  cout << "compression ratio: " << cr <<endl;
+
   //completed script
   return 0;
 
@@ -107,17 +107,19 @@ int main()
 float get_compression_ratio(Mat image, comp_t * image_comp, int num_frames)
 {
   //get original size
-  int original_size = (int) sizeof(OPENCV_TYPE)*image.cols*image.rows;
+  int original_size = (int) sizeof(pixel_t)*image.cols*image.rows;
   //get size compressed
   int comp_size = 0;
   for(int i=0; i<num_frames;i++) {
     comp_size += (int) sizeof(bus_t)*(2+image_comp[i].size);
   }
+  cout << "original size: " << original_size << " comp size: " << comp_size << endl;
+
   //return compression ratio
-  return original_size/comp_size;
+  return (float) (original_size/comp_size);
 }
 
-int get_compressed_image(comp_t ** image_comp, Mat image, int frame_width, int frame_height)
+int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int frame_height)
 {
   int image_width  = image.cols;
   int image_height = image.rows;
@@ -139,8 +141,8 @@ int get_compressed_image(comp_t ** image_comp, Mat image, int frame_width, int f
   for(int x=0;x<image_width;x+=frame_width) {
     for(int y=0;y<image_height;y+=frame_height) {
       Mat frame = image(Range(x,x+frame_width),Range(y,y+frame_height));
-      //(*image_comp)[array_index] = get_frame_pack(frame);
-      get_frame_pack(frame);
+      get_frame_pack(frame,(*image_comp)[array_index]);
+      //get_frame_pack(frame);
       array_index++;
     }
   }
@@ -149,9 +151,8 @@ int get_compressed_image(comp_t ** image_comp, Mat image, int frame_width, int f
   return num_frames;
 }
 
-comp_t get_frame_pack(Mat frame)
+void get_frame_pack(Mat frame, comp_t * frame_comp)
 {
-  comp_t frame_comp;
 
   //number of pixels in frame
   int num_pixels = frame.cols * frame.rows;
@@ -180,6 +181,8 @@ comp_t get_frame_pack(Mat frame)
   frame_comp.size = num_pixels_comp;
 
   pixel_t mask = ( 1 << (max_size+1) ) - 1; 
+
+  cout << num_pixels_comp << endl;
   
   //cout << "max_size" << max_size << " mask " << (int) mask << endl;
 
@@ -200,20 +203,20 @@ comp_t get_frame_pack(Mat frame)
       //get pixel
       pixel_t pixel = abs( frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg );
       pixel &= mask;
-  
+      
       //store data
       frame_comp.data[frame_data_index] |= (pixel << curr_shift);
       curr_shift += max_size;
 
       //check for overflow
       if( curr_shift > (sizeof(bus_t)*8-1) )
+      {
         curr_shift = curr_shift - sizeof(bus_t)*8;
         frame_data_index++;
-        
+        frame_comp.data[frame_data_index] |= (pixel >> (max_size - curr_shift) );
+      } 
     }
   }
-
- 
 
   return frame_comp;
 
