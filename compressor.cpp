@@ -58,7 +58,7 @@ string type2str(int type) {
 }
 
 int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int frame_height);
-void get_frame_pack(Mat frame, comp_t * frame_comp);
+void get_frame_pack(Mat frame, comp_t &frame_comp);
 float get_compression_ratio(Mat image, comp_t * image_comp, int num_frames);
 
 int main()
@@ -141,7 +141,7 @@ int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int f
   for(int x=0;x<image_width;x+=frame_width) {
     for(int y=0;y<image_height;y+=frame_height) {
       Mat frame = image(Range(x,x+frame_width),Range(y,y+frame_height));
-      get_frame_pack(frame,(*image_comp)[array_index]);
+      get_frame_pack(frame,&(*image_comp)[array_index]);
       //get_frame_pack(frame);
       array_index++;
     }
@@ -151,7 +151,7 @@ int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int f
   return num_frames;
 }
 
-void get_frame_pack(Mat frame, comp_t * frame_comp)
+void get_frame_pack(Mat frame, comp_t &frame_comp)
 {
 
   //number of pixels in frame
@@ -217,9 +217,6 @@ void get_frame_pack(Mat frame, comp_t * frame_comp)
       } 
     }
   }
-
-  return frame_comp;
-
 }
 
 Mat uncompress_frame(comp_t frame)
