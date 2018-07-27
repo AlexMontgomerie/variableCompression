@@ -17,10 +17,14 @@ typedef uint8_t pixel_t;
 typedef int8_t  pixel_t_s;
 
 struct comp_t {
-  bus_t avg;
-  bus_t data_width;
+  //header packet
+  uint8_t size;
+  uint8_t avg;
+  uint8_t frame_width;
+  uint8_t data_width;
+
+  //data
   bus_t * data;
-  int size;
 };
 
 template<typename T>
@@ -97,10 +101,8 @@ int main()
     return -1;
   }
 
-  namedWindow("test");
-  imshow("test",img);
-  waitKey(0);
-  destroyWindow("test");
+  namedWindow("before");
+  imshow("before",img);
 
   cout << "Image Loaded ..." << endl;
   string type =type2str(img.type());
@@ -126,6 +128,12 @@ int main()
 
   //Try uncompressing
   Mat img_out = uncompress_image(image_comp, num_frames);
+
+  namedWindow("after");
+  imshow("after",img_out);
+  waitKey(0);
+  destroyWindow("after");
+  destroyWindow("before");
 
   delete_compressed_image(image_comp, num_frames);
 
@@ -209,6 +217,9 @@ comp_t get_frame_pack(Mat frame)
   max_size = max_size + 1;
   frame_comp.data_width = max_size;
 
+  //get frame width
+  frame_comp.frame_width = frame.cols;
+
   //save the size of the data
   int num_pixels_comp = (int) ceil(num_pixels * max_size / (sizeof(bus_t)*8) );
   frame_comp.size = num_pixels_comp;
@@ -282,14 +293,7 @@ void delete_compressed_image(comp_t * image_comp, int num_frames)
 Mat uncompress_frame(comp_t frame)
 {
 
-  Mat tmp;
-
-  //int line_buf_size = (int) sizeof(bus_t)*8*ceil(frame.size/frame.data_width);
-  //int line_buf_size = (int) ceil(pow((sizeof(bus_t)*8*sqrt(frame.size)/frame.data_width),2));
-  int line_buf_size =  400;
-
-  cout<< "line_buffer_size " << line_buf_size << " frame size " << frame.size << endl;
-  cout << "Data width: " << frame.data_width << endl;
+  int line_buf_size =  frame.frame_width*frame.frame_width;
 
   pixel_t line_buf[line_buf_size];
   pixel_t mask =  ( 1 << (frame.data_width) ) - 1;
@@ -301,11 +305,6 @@ Mat uncompress_frame(comp_t frame)
 
     while( shift_index < sizeof(bus_t)*8 )
     {
-      if(line_buf_index>=line_buf_size)
-      {
-        cout << "ERROR (while): " << line_buf_index << " " << i << " " << frame.data_width << endl;
-        return tmp;
-      }
       line_buf[line_buf_index] = (pixel_t) ( frame.data[i]&(mask<<shift_index) ) >> shift_index ;
       if(shift_index <= (sizeof(bus_t)*8 - frame.data_width))
       {
@@ -317,23 +316,29 @@ Mat uncompress_frame(comp_t frame)
     shift_index = shift_index - sizeof(bus_t)*8;
     if(shift_index&&i<frame.size-1)
     {
-      if(line_buf_index>=line_buf_size)
-      {
-        cout << "ERROR: " << line_buf_index << endl;
-        return tmp;
-      }
       line_buf[line_buf_index] |=  (pixel_t) ( frame.data[i+1]&(mask>>shift_index) ) << shift_index  ;
       line_buf[line_buf_index] = ( (pixel_t_s) line_buf[line_buf_index]) + (pixel_t) frame.avg;
       line_buf_index++;
     }
   }
 
-  cout << "Line Buffer Size: " << line_buf_index << endl;
+  //cout << "Line Buffer Size: " << line_buf_index << endl;
 
-  int width_in  = (int) sqrt(line_buf_size);
-  int height_in = (int) sqrt(line_buf_size);
+  int width_in  = frame.frame_width;
+  int height_in = frame.frame_width;
 
-  cout << "width: " << width_in << endl;
+  //cout << "width: " << width_in << endl;
+
+  pixel_t frame_sqr[width_in][height_in];
+
+  //convert to square image
+  line_buf_index = 0;
+  for(int x=0; x<width_in; x++) {
+    for(int y=0; y<width_in; y++) {
+      frame_sqr[x][y] = line_buf[line_buf_index];
+      line_buf_index++;
+    }
+  }
 
   //int width_out_max = width_in *
 
@@ -342,19 +347,58 @@ Mat uncompress_frame(comp_t frame)
   //pixel_t img[width*frame.da];
 
   //for(int i=0;i<)
+  Mat img(width_in,height_in,CV_8U,frame_sqr);
+  //cout << "image width: " <<img.cols << " Image Height: "<<img.rows <<endl;
 
-  return tmp;
+  return img;
 
 }
 
 Mat uncompress_image(comp_t * image_comp, int num_frames)
 {
   Mat image;
+  Mat h_buffer;
   Mat tmp;
+
+  int width = (int) sqrt(num_frames);
+  int height = width;
+  cout << width <<endl;
+
+  int frame_index = 0;
+  for(int i=0;i<height;i++) {
+    for(int j=0;j<width;j++) {
+      tmp = uncompress_frame(image_comp[frame_index]);
+      frame_index++;
+
+      //first pixel
+      if(i==0&&j==0)
+        h_buffer = tmp;
+
+      //first_row
+      if(i==0&&j!=0)
+        hconcat(h_buffer,tmp,h_buffer);
+
+      //first row added
+      if(i==1&&j==0)
+        image = h_buffer;
+
+      if(i>1&&j==0)
+      {
+        vconcat(image,h_buffer,image);
+        h_buffer = tmp;
+      }
+
+      if(i>1&&j!=0)
+        hconcat(h_buffer,tmp,h_buffer);
+    }
+  }
+
+  cout << "image width: " <<image.cols << " Image Height: "<<image.rows <<endl;
+  /*
   for(int i=0;i<num_frames;i++)
   {
     tmp = uncompress_frame(image_comp[i]);
   }
-
+  */
   return image;
 }
