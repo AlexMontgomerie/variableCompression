@@ -20,12 +20,12 @@ struct comp_t {
   bus_t data_width;
   bus_t * data;
   int size;
-}; 
+};
 
 template<typename T>
 int find_msb(T data)
 {
-  int data_size =sizeof(T)*8; 
+  int data_size =sizeof(T)*8;
   for(int i=data_size-1;i>=0;i--)
   {
     if(data & (1 << i))
@@ -33,6 +33,7 @@ int find_msb(T data)
   }
   return 0;
 }
+
 
 string type2str(int type) {
   string r;
@@ -57,19 +58,36 @@ string type2str(int type) {
   return r;
 }
 
-int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int frame_height);
-void get_frame_pack(Mat frame, comp_t &frame_comp);
+int get_num_frames(Mat image, int frame_width, int frame_height)
+{
+  int image_width  = image.cols;
+  int image_height = image.rows;
+  //check frame size are suitable
+  if(image_width%frame_width != 0)
+    return 0;
+  if(image_height%frame_height != 0)
+    return 0;
+
+  return (int) ( (image_width/frame_width) * (image_height/frame_height) );
+}
+
+comp_t * get_compressed_image(Mat image, int frame_width, int frame_height);
+comp_t get_frame_pack(Mat frame);
 float get_compression_ratio(Mat image, comp_t * image_comp, int num_frames);
+void delete_compressed_image(comp_t * image_comp, int num_frames);
 
 int main()
 {
 
+  int frame_width  = 50;
+  int frame_height = 50;
+
   //load in an image
-  //Mat img(800, 800, OPENCV_TYPE, Scalar(100, 250, 30)); 
+  //Mat img(800, 800, OPENCV_TYPE, Scalar(100, 250, 30));
   Mat img_tmp = imread("med-test.jpg");
   Mat img;
   cvtColor(img_tmp,img,COLOR_BGR2GRAY);
-  if (img.empty()) 
+  if (img.empty())
   {
     cout << "Could not open or find the image" << endl;
     cin.get(); //wait for any key press
@@ -82,7 +100,7 @@ int main()
   destroyWindow("test");
 
   cout << "Image Loaded ..." << endl;
-  string type =type2str(img.type()); 
+  string type =type2str(img.type());
   cout << "Matrix: " << type <<" " << img.cols << " x " << img.rows << " x " << img.channels() << endl;
 
   //create frame buffer
@@ -90,13 +108,17 @@ int main()
   cout << "Compressed Image Buffer Created ..." << endl;
 
   //get frame buffer
-  int num_frames = get_compressed_image(image_comp, img, 50, 50);
+  int num_frames = get_num_frames(img, frame_width, frame_height);
+  image_comp = get_compressed_image(img, frame_width, frame_height);
 
   if (!num_frames)
     cout << "ERROR: image of wrong dimensions" << endl;
 
   float cr = get_compression_ratio(img,image_comp,num_frames);
   cout << "compression ratio: " << cr <<endl;
+
+  delete_compressed_image(image_comp, num_frames);
+
 
   //completed script
   return 0;
@@ -119,47 +141,50 @@ float get_compression_ratio(Mat image, comp_t * image_comp, int num_frames)
   return (float) (original_size/comp_size);
 }
 
-int get_compressed_image(comp_t *& image_comp, Mat image, int frame_width, int frame_height)
+comp_t * get_compressed_image(Mat image, int frame_width, int frame_height)
 {
+  //get dimensions
   int image_width  = image.cols;
   int image_height = image.rows;
-  
-  //check frame size are suitable
-  if(image_width%frame_width != 0)
-    return 0;
-  if(image_height%frame_height != 0)
-    return 0;
 
-  int num_frames = (int) ( (image_width/frame_width) * (image_height/frame_height) );
-  cout <<"num frames : " << num_frames <<endl;  
+  //get number of frames
+  int num_frames = get_num_frames(image, frame_width, frame_height);
+  if(!num_frames)
+    return NULL;
+
+  cout <<"num frames : " << num_frames <<endl;
 
   //create space for frames
-  *image_comp = new comp_t [num_frames];
+  comp_t * image_comp = new comp_t [num_frames];
 
   int array_index = 0;
 
   for(int x=0;x<image_width;x+=frame_width) {
     for(int y=0;y<image_height;y+=frame_height) {
       Mat frame = image(Range(x,x+frame_width),Range(y,y+frame_height));
-      get_frame_pack(frame,&(*image_comp)[array_index]);
+      image_comp[array_index] = get_frame_pack(frame);
       //get_frame_pack(frame);
       array_index++;
     }
   }
 
   //return number of frames
-  return num_frames;
+  return image_comp;
 }
 
-void get_frame_pack(Mat frame, comp_t &frame_comp)
+comp_t get_frame_pack(Mat frame)
 {
+
+  //create new frame
+  comp_t frame_comp;
 
   //number of pixels in frame
   int num_pixels = frame.cols * frame.rows;
+  cout << "num pixels: " << num_pixels << endl;
+
 
   //get mean
   frame_comp.avg = (bus_t) mean(frame)[0];
-  
 
   //get max data size
   bus_t max_size = 1;
@@ -175,15 +200,15 @@ void get_frame_pack(Mat frame, comp_t &frame_comp)
   //save the width of new data
   max_size = max_size + 1;
   frame_comp.data_width = max_size;
-  
+
   //save the size of the data
   int num_pixels_comp = (int) ceil(num_pixels * max_size / (sizeof(bus_t)*8) );
   frame_comp.size = num_pixels_comp;
 
-  pixel_t mask = ( 1 << (max_size+1) ) - 1; 
+  pixel_t mask = ( 1 << (max_size+1) ) - 1;
 
-  cout << num_pixels_comp << endl;
-  
+  cout << "num_pixels_comp: " << num_pixels_comp << endl;
+
   //cout << "max_size" << max_size << " mask " << (int) mask << endl;
 
   //create buffer for data
@@ -199,11 +224,11 @@ void get_frame_pack(Mat frame, comp_t &frame_comp)
   //pack data
   for(int i=0;i<frame.rows;i++) {
     for(int j=0;j<frame.cols;j++) {
-      
+
       //get pixel
       pixel_t pixel = abs( frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg );
       pixel &= mask;
-      
+
       //store data
       frame_comp.data[frame_data_index] |= (pixel << curr_shift);
       curr_shift += max_size;
@@ -214,10 +239,25 @@ void get_frame_pack(Mat frame, comp_t &frame_comp)
         curr_shift = curr_shift - sizeof(bus_t)*8;
         frame_data_index++;
         frame_comp.data[frame_data_index] |= (pixel >> (max_size - curr_shift) );
-      } 
+      }
     }
   }
+
+  //return Compressed frame
+  return frame_comp;
 }
+
+void delete_compressed_image(comp_t * image_comp, int num_frames)
+{
+  for(int i=0;i<num_frames;i++)
+  {
+    delete image_comp[i].data;
+  }
+
+  delete image_comp;
+  return;
+}
+
 
 Mat uncompress_frame(comp_t frame)
 {
@@ -228,4 +268,3 @@ Mat uncompress_image(comp_t * image, int num_frames)
 {
 
 }
-
