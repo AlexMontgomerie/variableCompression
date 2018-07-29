@@ -34,11 +34,21 @@ int find_msb(T data)
   for(int i=data_size-1;i>=0;i--)
   {
     if(data & (1 << i))
-      return i;
+      return i+1;
   }
-  return 0;
+  return 1;
 }
 
+template<typename T>
+T sign_extend(T data, int size)
+{
+  int num_shifts = sizeof(T)*8 - size;
+  for(int i=0;i<num_shifts;i++)
+  {
+    data |= (data&(1<<(size-1))) << (size + i);   
+  }
+  return data;
+}
 
 string type2str(int type) {
   string r;
@@ -77,11 +87,28 @@ int get_num_frames(Mat image, int frame_width, int frame_height)
 }
 
 comp_t * get_compressed_image(Mat image, int frame_width, int frame_height);
-comp_t get_frame_pack(Mat frame);
+void get_frame_pack(comp_t &frame_comp, Mat frame);
 double get_compression_ratio(Mat image, comp_t * image_comp, int num_frames);
 void delete_compressed_image(comp_t * image_comp, int num_frames);
 Mat uncompress_image(comp_t * image_comp, int num_frames);
 Mat uncompress_frame(comp_t frame);
+
+float get_error(Mat img_original, Mat img)
+{
+  int num_pixels = img.rows * img.cols;
+  int err = 0;
+
+  for(int x=0;x<img.cols;x++) {
+    for(int y=0;y<img.cols;y++) {
+      pixel_t pixel_original  = img_original.at<pixel_t>(x,y);
+      pixel_t pixel           = img.at<pixel_t>(x,y);
+      if(pixel != pixel_original)
+        err++; 
+    }
+  }
+
+  return err/num_pixels;
+}
 
 int main()
 {
@@ -129,11 +156,15 @@ int main()
   //Try uncompressing
   Mat img_out = uncompress_image(image_comp, num_frames);
 
+  float err = get_error(img, img_out);
+  printf("Error: %f \n", err);
+  
   namedWindow("after");
   imshow("after",img_out);
   waitKey(0);
   destroyWindow("after");
   destroyWindow("before");
+  
 
   delete_compressed_image(image_comp, num_frames);
 
@@ -179,7 +210,7 @@ comp_t * get_compressed_image(Mat image, int frame_width, int frame_height)
   for(int x=0;x<image_width;x+=frame_width) {
     for(int y=0;y<image_height;y+=frame_height) {
       Mat frame = image(Range(x,x+frame_width),Range(y,y+frame_height));
-      image_comp[array_index] = get_frame_pack(frame);
+      get_frame_pack(image_comp[array_index],frame);
       //get_frame_pack(frame);
       array_index++;
     }
@@ -189,18 +220,18 @@ comp_t * get_compressed_image(Mat image, int frame_width, int frame_height)
   return image_comp;
 }
 
-comp_t get_frame_pack(Mat frame)
+void get_frame_pack(comp_t &frame_comp, Mat frame)
 {
 
   //create new frame
-  comp_t frame_comp;
+  //comp_t frame_comp;
 
   //number of pixels in frame
   int num_pixels = frame.cols * frame.rows;
   //cout << "num pixels: " << num_pixels << endl;
 
   //get mean
-  frame_comp.avg = (bus_t) mean(frame)[0];
+  frame_comp.avg = (pixel_t) mean(frame)[0];
 
   //get max data size
   bus_t max_size = 1;
@@ -215,6 +246,7 @@ comp_t get_frame_pack(Mat frame)
 
   //save the width of new data
   max_size = max_size + 1;
+  max_size = 8;
   frame_comp.data_width = max_size;
 
   //get frame width
@@ -245,12 +277,12 @@ comp_t get_frame_pack(Mat frame)
     for(int j=0;j<frame.cols;j++) {
       //cout << "index: "<< frame_data_index << endl;
       //get pixel
-      pixel_t pixel = abs( frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg );
+      pixel_t pixel = frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg ;
       pixel &= mask;
 
       //check indexing is correct
       if(frame_data_index >= num_pixels_comp)
-        return frame_comp;
+        return;
 
       //store data
       frame_comp.data[frame_data_index] |= (pixel << curr_shift);
@@ -264,7 +296,7 @@ comp_t get_frame_pack(Mat frame)
 
         //check indexing is correct
         if(frame_data_index >= num_pixels_comp)
-          return frame_comp;
+          return;
 
         if(curr_shift!=0)
         {
@@ -308,7 +340,8 @@ Mat uncompress_frame(comp_t frame)
       line_buf[line_buf_index] = (pixel_t) ( frame.data[i]&(mask<<shift_index) ) >> shift_index ;
       if(shift_index <= (sizeof(bus_t)*8 - frame.data_width))
       {
-        line_buf[line_buf_index] = (pixel_t) ((pixel_t_s) line_buf[line_buf_index]) + (pixel_t) frame.avg;
+        line_buf[line_buf_index] = (pixel_t) ((pixel_t_s) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t_s) frame.avg);
+        line_buf[line_buf_index] = sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width);
         line_buf_index++;
       }
       shift_index += frame.data_width;
@@ -317,7 +350,7 @@ Mat uncompress_frame(comp_t frame)
     if(shift_index&&i<frame.size-1)
     {
       line_buf[line_buf_index] |=  (pixel_t) ( frame.data[i+1]&(mask>>shift_index) ) << shift_index  ;
-      line_buf[line_buf_index] = ( (pixel_t_s) line_buf[line_buf_index]) + (pixel_t) frame.avg;
+      line_buf[line_buf_index] = (pixel_t) ((pixel_t_s) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t_s) frame.avg);
       line_buf_index++;
     }
   }
@@ -382,17 +415,22 @@ Mat uncompress_image(comp_t * image_comp, int num_frames)
       if(i==1&&j==0)
         image = h_buffer;
 
+      //new row
       if(i>1&&j==0)
       {
         vconcat(image,h_buffer,image);
         h_buffer = tmp;
       }
 
+      //regular appending to row
       if(i>1&&j!=0)
         hconcat(h_buffer,tmp,h_buffer);
     }
   }
 
+  //add last row
+  vconcat(image,h_buffer,image);
+  
   cout << "image width: " <<image.cols << " Image Height: "<<image.rows <<endl;
   /*
   for(int i=0;i<num_frames;i++)
