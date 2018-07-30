@@ -91,7 +91,7 @@ void get_frame_pack(comp_t &frame_comp, Mat frame);
 double get_compression_ratio(Mat image, comp_t * image_comp, int num_frames);
 void delete_compressed_image(comp_t * image_comp, int num_frames);
 Mat uncompress_image(comp_t * image_comp, int num_frames);
-Mat uncompress_frame(comp_t frame);
+Mat uncompress_frame(comp_t &frame);
 
 float get_error(Mat img_original, Mat img)
 {
@@ -148,7 +148,10 @@ int main()
   }
 
   image_comp = get_compressed_image(img, frame_width, frame_height);
-
+  
+  for(int i=0;i<num_frames;i++) {
+    printf("Pointer: %d\n",image_comp[i].data[0]);
+  }
 
   double comp_ratio = get_compression_ratio(img,image_comp,num_frames);
   printf("compression ratio: %f\n",comp_ratio);
@@ -277,37 +280,64 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
     for(int j=0;j<frame.cols;j++) {
       //cout << "index: "<< frame_data_index << endl;
       //get pixel
-      pixel_t pixel = frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg ;
-      pixel &= mask;
+      pixel_t pixel = (pixel_t) (frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg) ;
+      pixel &= (pixel_t) mask;
+      
+      //add to packet
+      frame_comp.data[frame_data_index] |= (pixel << curr_shift);
 
+      //overflow condition
+      if( curr_shift >= (sizeof(bus_t)*8 - 8) )
+      {
+        frame_data_index++;
+        frame_comp.data[frame_data_index] |= (pixel >> (max_size - curr_shift) ); //TODO: might be an issue later
+        
+      }
+
+      curr_shift += max_size;
+      if( curr_shift >= (sizeof(bus_t)*8) )
+        curr_shift = curr_shift - sizeof(bus_t)*8;
+     
+ 
+      /*
       //check indexing is correct
       if(frame_data_index >= num_pixels_comp)
+      {  
+        printf("Index error\n");
         return;
-
+      }
       //store data
       frame_comp.data[frame_data_index] |= (pixel << curr_shift);
       curr_shift += max_size;
 
       //check for overflow
-      if( curr_shift >= (sizeof(bus_t)*8) )
+      if( curr_shift > (sizeof(bus_t)*8 - 8) )
       {
+        //next frame
+        frame_data_index++;
+        
         //shift index around
         curr_shift = curr_shift - sizeof(bus_t)*8;
 
         //check indexing is correct
         if(frame_data_index >= num_pixels_comp)
+        {  
+          printf("Index error\n");
           return;
-
+        }
+        
         if(curr_shift!=0)
         {
-          frame_data_index++;
           frame_comp.data[frame_data_index] |= (pixel >> (max_size - curr_shift) ); //TODO: might be an issue later
         }
       }
+      */
     }
   }
   //return Compressed frame
-  return frame_comp;
+  printf("frame_index: %d, frame_size: %d\n",frame_data_index,num_pixels_comp);
+  printf("first value (inside): %d\n", frame_comp.data[0]); 
+  return;
 }
 
 void delete_compressed_image(comp_t * image_comp, int num_frames)
@@ -322,13 +352,15 @@ void delete_compressed_image(comp_t * image_comp, int num_frames)
 }
 
 
-Mat uncompress_frame(comp_t frame)
+Mat uncompress_frame(comp_t &frame)
 {
 
   int line_buf_size =  frame.frame_width*frame.frame_width;
 
   pixel_t line_buf[line_buf_size];
   pixel_t mask =  ( 1 << (frame.data_width) ) - 1;
+
+  cout << "mask: " << (int)mask << endl;
 
   int line_buf_index = 0;
   int shift_index = 0;
@@ -337,10 +369,10 @@ Mat uncompress_frame(comp_t frame)
 
     while( shift_index < sizeof(bus_t)*8 )
     {
-      line_buf[line_buf_index] = (pixel_t) ( frame.data[i]&(mask<<shift_index) ) >> shift_index ;
+      line_buf[line_buf_index] = (pixel_t) (( frame.data[i]&(mask<<shift_index) ) >> shift_index) ;
       if(shift_index <= (sizeof(bus_t)*8 - frame.data_width))
       {
-        line_buf[line_buf_index] = (pixel_t) ((pixel_t_s) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t_s) frame.avg);
+        line_buf[line_buf_index] = (pixel_t) ((pixel_t) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t) frame.avg);
         line_buf[line_buf_index] = sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width);
         line_buf_index++;
       }
@@ -349,13 +381,13 @@ Mat uncompress_frame(comp_t frame)
     shift_index = shift_index - sizeof(bus_t)*8;
     if(shift_index&&i<frame.size-1)
     {
-      line_buf[line_buf_index] |=  (pixel_t) ( frame.data[i+1]&(mask>>shift_index) ) << shift_index  ;
-      line_buf[line_buf_index] = (pixel_t) ((pixel_t_s) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t_s) frame.avg);
+      line_buf[line_buf_index] |=  (pixel_t) (( frame.data[i+1]&(mask>>shift_index) ) << shift_index)  ;
+      line_buf[line_buf_index] = (pixel_t) ((pixel_t) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t) frame.avg);
       line_buf_index++;
     }
   }
 
-  //cout << "Line Buffer Size: " << line_buf_index << endl;
+  cout << "Line Buffer Size: " << line_buf_index<< "frame size"<<(int)frame.size << endl;
 
   int width_in  = frame.frame_width;
   int height_in = frame.frame_width;
