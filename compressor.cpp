@@ -18,10 +18,10 @@ typedef int8_t  pixel_t_s;
 
 struct comp_t {
   //header packet
-  uint8_t size;
-  uint8_t avg;
-  uint8_t frame_width;
-  uint8_t data_width;
+  uint32_t size;
+  uint32_t avg;
+  uint32_t frame_width;
+  uint32_t data_width;
 
   //data
   bus_t * data;
@@ -42,10 +42,10 @@ int find_msb(T data)
 template<typename T>
 T sign_extend(T data, int size)
 {
-  int num_shifts = sizeof(T)*8 - size;
+  int num_shifts = sizeof(T)*8 - size + 1;
   for(int i=0;i<num_shifts;i++)
   {
-    data |= (data&(1<<(size-1))) << (size + i);   
+    data |= (data&(1<<(size-1))) << (i);   
   }
   return data;
 }
@@ -108,17 +108,21 @@ float get_error(Mat img_original, Mat img)
     }
   }
 
-  return err/num_pixels;
+  return err;
 }
 
 int main()
 {
 
-  int frame_width  = 20;
-  int frame_height = 20;
+  int frame_width  = 80;
+  int frame_height = 80;
+
+  pixel_t tmp_sign = sign_extend<pixel_t>(3, 2);
+  printf("test:%d\n", tmp_sign);
+
 
   //load in an image
-  //Mat img(800, 800, CV_8U, Scalar(100, 250, 30));
+  //Mat img(800, 800, CV_8U, Scalar(255, 250, 30));
   Mat img_tmp = imread("big-test.jpg");
   Mat img;
   cvtColor(img_tmp,img,COLOR_RGB2GRAY);
@@ -234,7 +238,7 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
 
   //number of pixels in frame
   int num_pixels = frame.cols * frame.rows;
-  //cout << "num pixels: " << num_pixels << endl;
+  cout << "num pixels: " << num_pixels << endl;
 
   //get mean
   frame_comp.avg = (pixel_t) mean(frame)[0];
@@ -243,8 +247,9 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
   bus_t max_size = 1;
   for(int i=0;i<frame.rows;i++) {
     for(int j=0;j<frame.cols;j++) {
-      pixel_t pixel = frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg ;
+      int pixel = frame.at<pixel_t>(i,j) - frame_comp.avg ;
       int msb = find_msb<pixel_t>(abs((pixel_t_s) pixel));
+      //cout <<"msb " << msb << endl;
       if(msb > max_size)
         max_size = msb;
     }
@@ -264,9 +269,9 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
 
   pixel_t mask = ( 1 << (max_size) ) - 1;
 
-  //cout << "num_pixels_comp: " << num_pixels_comp << endl;
+  cout << "num_pixels_comp: " << num_pixels_comp << endl;
 
-  cout << "max_size" << max_size << " mask " << (int) mask << endl;
+  cout << "max_size" << max_size << " mask " << (int) mask << "avg: "<<frame_comp.avg << endl;
 
   //create buffer for data
   frame_comp.data = new bus_t [num_pixels_comp];
@@ -284,8 +289,15 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
       //cout << "index: "<< frame_data_index << endl;
       //get pixel
       pixel_t pixel = (pixel_t) (frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg) ;
-      pixel &= (pixel_t) mask;
+      //if(pixel > mask)
+      //  printf("here, %d\n", pixel);
       
+      pixel &= (pixel_t) mask;
+      //  printf("here, %d\n", pixel);
+
+      
+      //printf("pixel: %d\n",pixel);
+
       //add to packet
       frame_comp.data[frame_data_index] |= (pixel << curr_shift);
 
@@ -296,7 +308,7 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
         frame_data_index++;
         if(frame_data_index==num_pixels_comp)
         {
-          printf("index error: %d, %d, %d\n",frame_data_index,i,j);
+          //printf("index error: %d, %d, %d\n",frame_data_index,i,j);
           break;
         }
         curr_shift-=sizeof(bus_t)*8;
@@ -369,12 +381,12 @@ Mat uncompress_frame(comp_t &frame)
 
   pixel_t * line_buf = new pixel_t[line_buf_size];
   
-  pixel_t mask =  ( 1 << (frame.data_width) ) - 1;
+  pixel_t mask = ( ( 1 << (frame.data_width) ) - 1 ) | 1;
 
-  //cout << "mask: " << (int)mask << endl;
+  cout << "mask: " << (int)mask << endl;
 
-  int line_buf_index = 0;
-  int shift_index = 0;
+  unsigned int line_buf_index = 0;
+  unsigned int shift_index = 0;
 
   for(int i=0;i<frame.size;i++);
     //printf("data in: %d\n",frame.data[i]);
@@ -383,26 +395,27 @@ Mat uncompress_frame(comp_t &frame)
   
   
   for(int i=0;i<frame.size;i++) {
+    
     // sort out previous data
     if(shift_index)
     {
-      line_buf[line_buf_index-1] |=  (pixel_t) (( frame.data[i]&(mask>>(frame.data_width - shift_index)) ) << (frame.data_width - shift_index))  ;
+      line_buf[line_buf_index-1] +=(( (frame.data[i])&(mask>>(frame.data_width - shift_index)) ) << (frame.data_width - shift_index))  ;
       line_buf[line_buf_index-1] = sign_extend<pixel_t>(line_buf[line_buf_index-1], frame.data_width);
-      line_buf[line_buf_index-1] = (pixel_t) line_buf[line_buf_index-1] + frame.avg;
+      line_buf[line_buf_index-1] = (pixel_t) line_buf[line_buf_index-1] + (pixel_t) frame.avg;
       //line_buf[line_buf_index-1] = line_buf[line_buf_index];
-
+      //printf("here\n");
     }
 
     //get main block of data
-    while(shift_index < sizeof(bus_t)*8 && line_buf_index<line_buf_size) 
+    while(shift_index < sizeof(bus_t)*8) 
     {
       if(line_buf_index==line_buf_size)
-       break; 
-      line_buf[line_buf_index] = (pixel_t) (( frame.data[i]&(mask<<shift_index) ) >> shift_index) ;
+        break; 
+      line_buf[line_buf_index] = (( (frame.data[i])&(mask<<shift_index) ) >> shift_index) ;
       if(shift_index <= (sizeof(bus_t)*8 - frame.data_width))
       {
         line_buf[line_buf_index] = sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width);
-        line_buf[line_buf_index] = (pixel_t) line_buf[line_buf_index] + frame.avg;
+        line_buf[line_buf_index] = (pixel_t) line_buf[line_buf_index] + (pixel_t) frame.avg;
       }
       line_buf_index++;
       shift_index+=frame.data_width;
@@ -435,10 +448,15 @@ Mat uncompress_frame(comp_t &frame)
     }
   }
 */
-  //cout << "Line Buffer Size: " << line_buf_index<< "frame size"<<(int)frame.size << endl;
+  cout << "Line Buffer Size: " << line_buf_index<< "frame size"<<(int)frame.size << endl;
 
   int width_in  = frame.frame_width;
   int height_in = frame.frame_width;
+
+  for (int i=0;i<line_buf_size;i++)
+  {
+    //printf("Pixel: %d\n", line_buf[i]);
+  }
 
   Mat img(width_in,height_in,CV_8U,line_buf);
 
@@ -471,7 +489,13 @@ Mat uncompress_image(comp_t * image_comp, int num_frames)
 
       //first row added
       if(i==1&&j==0)
+      {
         image = h_buffer;
+        h_buffer = tmp;
+      } 
+
+      if(i==1&&j!=0)
+        hconcat(h_buffer,tmp,h_buffer);
 
       //new row
       if(i>1&&j==0)
