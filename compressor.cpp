@@ -108,14 +108,14 @@ float get_error(Mat img_original, Mat img)
     }
   }
 
-  return err;
+  return (float) err/num_pixels;
 }
 
 int main()
 {
 
-  int frame_width  = 80;
-  int frame_height = 80;
+  int frame_width  = 20;
+  int frame_height = 20;
 
   pixel_t tmp_sign = sign_extend<pixel_t>(3, 2);
   printf("test:%d\n", tmp_sign);
@@ -233,12 +233,8 @@ comp_t * get_compressed_image(Mat image, int frame_width, int frame_height)
 void get_frame_pack(comp_t &frame_comp, Mat frame)
 {
 
-  //create new frame
-  //comp_t frame_comp;
-
   //number of pixels in frame
   int num_pixels = frame.cols * frame.rows;
-  cout << "num pixels: " << num_pixels << endl;
 
   //get mean
   frame_comp.avg = (pixel_t) mean(frame)[0];
@@ -249,7 +245,6 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
     for(int j=0;j<frame.cols;j++) {
       int pixel = frame.at<pixel_t>(i,j) - frame_comp.avg ;
       int msb = find_msb<pixel_t>(abs((pixel_t_s) pixel));
-      //cout <<"msb " << msb << endl;
       if(msb > max_size)
         max_size = msb;
     }
@@ -266,12 +261,7 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
   //save the size of the data
   int num_pixels_comp = (int) ceil((float) num_pixels * max_size / (sizeof(bus_t)*8) );
   frame_comp.size = num_pixels_comp;
-
   pixel_t mask = ( 1 << (max_size) ) - 1;
-
-  cout << "num_pixels_comp: " << num_pixels_comp << endl;
-
-  cout << "max_size" << max_size << " mask " << (int) mask << "avg: "<<frame_comp.avg << endl;
 
   //create buffer for data
   frame_comp.data = new bus_t [num_pixels_comp];
@@ -286,17 +276,8 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
   //pack data
   for(int i=0;i<frame.rows;i++) {
     for(int j=0;j<frame.cols;j++) {
-      //cout << "index: "<< frame_data_index << endl;
-      //get pixel
       pixel_t pixel = (pixel_t) (frame.at<pixel_t>(i,j) - (pixel_t) frame_comp.avg) ;
-      //if(pixel > mask)
-      //  printf("here, %d\n", pixel);
-      
       pixel &= (pixel_t) mask;
-      //  printf("here, %d\n", pixel);
-
-      
-      //printf("pixel: %d\n",pixel);
 
       //add to packet
       frame_comp.data[frame_data_index] |= (pixel << curr_shift);
@@ -307,57 +288,14 @@ void get_frame_pack(comp_t &frame_comp, Mat frame)
         //printf("here now\n");
         frame_data_index++;
         if(frame_data_index==num_pixels_comp)
-        {
-          //printf("index error: %d, %d, %d\n",frame_data_index,i,j);
           break;
-        }
-        curr_shift-=sizeof(bus_t)*8;
+        curr_shift = curr_shift + max_size - sizeof(bus_t)*8;
         frame_comp.data[frame_data_index] |= (pixel >> (max_size - curr_shift) ); //TODO: might be an issue later
       }
-  
-      curr_shift+=max_size;
-
-      /*
-      //check indexing is correct
-      if(frame_data_index >= num_pixels_comp)
-     {  
-        printf("Index error\n");
-        return;
-      }
-      //store data
-      frame_comp.data[frame_data_index] |= (pixel << curr_shift);
-      curr_shift += max_size;
-
-      //check for overflow
-      if( curr_shift > (sizeof(bus_t)*8 - 8) )
-      {
-        //next frame
-        frame_data_index++;
-        
-        //shift index around
-        curr_shift = curr_shift - sizeof(bus_t)*8;
-
-        //check indexing is correct
-        if(frame_data_index >= num_pixels_comp)
-        {  
-          printf("Index error\n");
-          return;
-        }
-        
-        if(curr_shift!=0)
-        {
-          frame_comp.data[frame_data_index] |= (pixel >> (max_size - curr_shift) ); //TODO: might be an issue later
-        }
-      }
-      */
+      else  
+        curr_shift+=max_size;
     }
-
   }
-  //return Compressed frame
-  //printf("frame_index: %d, frame_size: %d\n",frame_data_index,num_pixels_comp);
-  //printf("first value (inside): %d\n", frame_comp.data[0]); 
-  for(int i=0;i<num_pixels_comp;i++);
-    //printf("frame_pixel: %d\n",frame_comp.data[i]);
 
  return;
 }
@@ -378,21 +316,12 @@ Mat uncompress_frame(comp_t &frame)
 {
 
   int line_buf_size =  frame.frame_width*frame.frame_width;
-
   pixel_t * line_buf = new pixel_t[line_buf_size];
-  
   pixel_t mask = ( ( 1 << (frame.data_width) ) - 1 ) | 1;
-
-  cout << "mask: " << (int)mask << endl;
 
   unsigned int line_buf_index = 0;
   unsigned int shift_index = 0;
 
-  for(int i=0;i<frame.size;i++);
-    //printf("data in: %d\n",frame.data[i]);
-
-  int inner_frame_width = (int) ceil((float) (sizeof(bus_t)*8) / frame.data_width);
-  
   
   for(int i=0;i<frame.size;i++) {
     
@@ -402,8 +331,6 @@ Mat uncompress_frame(comp_t &frame)
       line_buf[line_buf_index-1] +=(( (frame.data[i])&(mask>>(frame.data_width - shift_index)) ) << (frame.data_width - shift_index))  ;
       line_buf[line_buf_index-1] = sign_extend<pixel_t>(line_buf[line_buf_index-1], frame.data_width);
       line_buf[line_buf_index-1] = (pixel_t) line_buf[line_buf_index-1] + (pixel_t) frame.avg;
-      //line_buf[line_buf_index-1] = line_buf[line_buf_index];
-      //printf("here\n");
     }
 
     //get main block of data
@@ -422,46 +349,13 @@ Mat uncompress_frame(comp_t &frame)
     }
     shift_index -= sizeof(bus_t)*8;
   }
-/*
-  for(int i=0;i<frame.size-1;i++) {
 
-    while( shift_index < sizeof(bus_t)*8 )
-    {
-      line_buf[line_buf_index] = (pixel_t) (( frame.data[i]&(mask<<shift_index) ) >> shift_index) ;
-      if(shift_index <= (sizeof(bus_t)*8 - frame.data_width))
-      {
-        line_buf[line_buf_index] = (pixel_t) ((pixel_t) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t) frame.avg);
-        line_buf[line_buf_index] = sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width);
-        line_buf_index++;
-      }
-      shift_index += frame.data_width;
-    }
-    shift_index = shift_index - sizeof(bus_t)*8;
-    if(shift_index&&(i<frame.size-1))
-    {
-      printf("here\n");
-      line_buf[line_buf_index] |=  (pixel_t) (( frame.data[i+1]&(mask>>shift_index) ) << shift_index)  ;
-      line_buf[line_buf_index] = (pixel_t) ((pixel_t) sign_extend<pixel_t>(line_buf[line_buf_index], frame.data_width)) + ((pixel_t) frame.avg);
-      line_buf_index++;
-      if(line_buf_index==line_buf_size)
-        break;
-    }
-  }
-*/
-  cout << "Line Buffer Size: " << line_buf_index<< "frame size"<<(int)frame.size << endl;
 
   int width_in  = frame.frame_width;
   int height_in = frame.frame_width;
 
-  for (int i=0;i<line_buf_size;i++)
-  {
-    //printf("Pixel: %d\n", line_buf[i]);
-  }
-
   Mat img(width_in,height_in,CV_8U,line_buf);
-
   return img;
-
 }
 
 Mat uncompress_image(comp_t * image_comp, int num_frames)
@@ -471,7 +365,6 @@ Mat uncompress_image(comp_t * image_comp, int num_frames)
 
   int width = (int) sqrt(num_frames);
   int height = width;
-  cout << width <<endl;
 
   int frame_index = 0;
   for(int i=0;i<height;i++) {
@@ -514,11 +407,6 @@ Mat uncompress_image(comp_t * image_comp, int num_frames)
   vconcat(image,h_buffer,image);
   
   cout << "image width: " <<image.cols << " Image Height: "<<image.rows <<endl;
-  /*
-  for(int i=0;i<num_frames;i++)
-  {
-    tmp = uncompress_frame(image_comp[i]);
-  }
-  */
+  
   return image;
 }
